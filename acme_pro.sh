@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Acme Pro v3.9
+# Acme Pro v4.0
 # ==========================================
 
 # --- 1. UI 與配色定義 ---
@@ -47,24 +47,18 @@ install_deps() {
     fi
 }
 
-# [核心修復] 創建快捷方式增強版
 create_shortcut() {
-    # 1. 檢測腳本文件是否存在，不存在則從雲端下載 (修復內存運行問題)
     if [[ ! -f "$SCRIPT_PATH" ]]; then
-        green "檢測到腳本未安裝到本地，正在執行自我安裝..."
         wget -q -O "$SCRIPT_PATH" "$REMOTE_URL"
         if [[ ! -f "$SCRIPT_PATH" ]]; then
-             # 如果 wget 失敗，嘗試 curl
              curl -s -o "$SCRIPT_PATH" "$REMOTE_URL"
         fi
         chmod +x "$SCRIPT_PATH"
     fi
 
-    # 2. 創建快捷指令
     if [[ -f "$SCRIPT_PATH" ]] && [[ ! -f /usr/bin/ac-pro ]]; then
         ln -sf "$SCRIPT_PATH" /usr/bin/ac-pro
         chmod +x /usr/bin/ac-pro
-        green "快捷命令 ac-pro 已成功創建！"
     fi
 }
 
@@ -90,6 +84,13 @@ check_and_update_email() {
         green "保持默認郵箱，繼續執行..."
     fi
     echo
+}
+
+# 返回主菜單函數
+back_to_menu() {
+    echo
+    read -n 1 -s -r -p "按任意鍵返回主菜單..."
+    show_menu
 }
 
 # --- 4. 業務邏輯 (內核) ---
@@ -207,7 +208,7 @@ action_apply_standalone() {
     check_and_update_email
     while true; do
         readp "請輸入解析完成的域名 (輸入 0 返回): " ym
-        if [[ "$ym" == "0" ]]; then return; fi
+        if [[ "$ym" == "0" ]]; then show_menu; return; fi # 返回主菜單
         if [[ -z "$ym" ]]; then
             red "域名不能為空，請重新輸入。"
             continue
@@ -229,13 +230,14 @@ action_apply_standalone() {
 
     green "域名: $ym" && sleep 1
     issue_cert_core "$ym" "standalone"
+    back_to_menu # 執行完畢返回菜單
 }
 
 action_apply_dns() {
     check_and_update_email
     while true; do
         readp "請輸入主域名 (不要帶*，輸入 0 返回): " ym
-        if [[ "$ym" == "0" ]]; then return; fi
+        if [[ "$ym" == "0" ]]; then show_menu; return; fi # 返回主菜單
         if [[ -z "$ym" ]]; then
             red "域名不能為空，請重新輸入。"
             continue
@@ -274,6 +276,7 @@ action_apply_dns() {
             issue_cert_core "$ym" "dns" "dns_ali" ;;
         * ) red "輸入錯誤" && exit 1 ;;
     esac
+    back_to_menu # 執行完畢返回菜單
 }
 
 action_apply_menu() {
@@ -296,13 +299,14 @@ action_list_certs() {
         blue "本地文件路徑 ($CERT_DIR):"
         ls -lh "$CERT_DIR/"
     fi
+    back_to_menu # 執行完畢返回菜單
 }
 
 action_revoke_delete() {
-    action_list_certs
+    action_list_certs # 這裡不要調用 back_to_menu，因為還沒執行完
     while true; do
         readp "請輸入要刪除的域名 (Main_Domain) (輸入 0 返回): " ym
-        if [[ "$ym" == "0" ]]; then return; fi
+        if [[ "$ym" == "0" ]]; then show_menu; return; fi # 返回主菜單
         if [[ -z "$ym" ]]; then
             red "域名不能為空，請重新輸入。"
         else
@@ -319,12 +323,14 @@ action_revoke_delete() {
     else
         yellow "已取消。"
     fi
+    back_to_menu # 執行完畢返回菜單
 }
 
 action_renew() {
     green "正在強制續期..."
     "$ACME_HOME"/acme.sh --cron --force
     green "續期完成。"
+    back_to_menu # 執行完畢返回菜單
 }
 
 action_uninstall() {
@@ -341,6 +347,7 @@ action_uninstall() {
             rm -f "$SCRIPT_PATH" "/usr/bin/ac-pro" "/usr/bin/ac" "/usr/bin/acme"
             green "腳本已移除。您的證書和自動續期任務依然有效。"
             green "如需管理證書，請手動使用 ~/.acme.sh/acme.sh 命令。"
+            exit 0 # 卸載成功，退出腳本
             ;;
         2)
             readp "警告：這將刪除所有證書文件！確認執行？[y/N]: " confirm
@@ -351,12 +358,15 @@ action_uninstall() {
                 rm -rf "$ACME_HOME" "$CERT_DIR" "$SCRIPT_PATH" "/usr/bin/ac-pro" "/usr/bin/ac" "/usr/bin/acme"
                 sed -i '/acme.sh/d' ~/.bashrc
                 green "徹底卸載完成，環境已清理。"
+                exit 0 # 卸載成功，退出腳本
             else
                 yellow "已取消。"
+                back_to_menu
             fi
             ;;
         *)
             yellow "已取消。"
+            back_to_menu
             ;;
     esac
 }
@@ -371,7 +381,8 @@ show_menu() {
     get_current_cert_info
 
     green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"           
-    echo -e "${bblue}   Acme Pro Script (v3.9)          ${plain}"
+    echo -e "${bblue}   項目地址：https://github.com/Yat-Muk/acme-ym ${plain}"
+    echo -e "${bblue}   Acme Pro Script (v4.0)          ${plain}"
     echo -e "${bblue}   快捷命令: 輸入 ac-pro 即可再次運行 ${plain}"
     green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
     echo
@@ -400,8 +411,6 @@ show_menu() {
 }
 
 # --- 7. 入口 ---
-# 確保每次運行都嘗試修復快捷指令 (如果丟失)
 create_shortcut
-
 if [[ "$1" == "--source-only" ]]; then return 0 2>/dev/null || exit 0; fi
 show_menu
