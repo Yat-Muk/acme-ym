@@ -1,9 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Acme Pro v3.1 (極速版)
-# 優化：依賴檢測邏輯 (秒級啟動)
-# 新增：自動創建快捷命令 'acme'
+# Acme Pro v3.3
 # ==========================================
 
 # --- 1. UI 與配色定義 ---
@@ -28,10 +26,8 @@ check_root() {
     [[ $EUID -ne 0 ]] && red "請以root模式運行腳本" && exit 1
 }
 
-# [優化] 極速依賴檢測
 install_deps() {
     local deps_missing=0
-    # 遍歷檢查關鍵命令，只有缺失時才標記為需要安裝
     for cmd in curl socat cron lsof tar; do
         if ! command -v $cmd &> /dev/null; then
             deps_missing=1
@@ -51,23 +47,16 @@ install_deps() {
         fi
         green "依賴安裝完成。"
     fi
-    # 如果依賴都存在，這裡什麼都不做，實現秒開
 }
 
-# [新增] 創建快捷指令
 create_shortcut() {
-    # 1. 確保腳本自身保存在本地固定路徑
-    if [[ ! -f "$SCRIPT_PATH" ]]; then
-        if [[ -f "$0" ]]; then
-            cp "$0" "$SCRIPT_PATH"
-        fi
+    if [[ ! -f "$SCRIPT_PATH" ]] && [[ -f "$0" ]]; then
+        cp "$0" "$SCRIPT_PATH"
     fi
-
-    # 2. 創建 /usr/bin/acme 軟鏈接
-    if [[ -f "$SCRIPT_PATH" ]] && [[ ! -f /usr/bin/acme ]]; then
+    if [[ -f "$SCRIPT_PATH" ]] && [[ ! -f /usr/bin/ac ]]; then
         chmod +x "$SCRIPT_PATH"
-        ln -sf "$SCRIPT_PATH" /usr/bin/acme
-        green "快捷命令已創建！以後輸入 'acme' 即可進入菜單。"
+        ln -sf "$SCRIPT_PATH" /usr/bin/ac
+        green "快捷命令已創建！以後輸入 'ac' 即可進入菜單。"
         sleep 1
     fi
 }
@@ -84,12 +73,58 @@ install_acme_core() {
         curl https://get.acme.sh | sh -s email="$Aemail"
         source ~/.bashrc
     else
-        # 靜默更新
         "$ACME_HOME"/acme.sh --upgrade --auto-upgrade >/dev/null 2>&1
     fi
 }
 
 # --- 4. 業務邏輯 (內核) ---
+
+check_domain_consistency() {
+    local domain=$1
+    green "正在進行域名 IP 安全檢測..."
+    
+    local local_v4=$(curl -s4m5 https://api.ip.sb/ip -k)
+    local local_v6=$(curl -s6m5 https://api.ip.sb/ip -k)
+    local domain_ips=$(getent hosts "$domain" | awk '{print $1}')
+    
+    if [[ -z "$domain_ips" ]]; then
+        red "錯誤：無法解析域名 $domain，請檢查 DNS 設置。"
+        return 1
+    fi
+
+    local match_found=0
+    for ip in $domain_ips; do
+        if [[ -n "$local_v4" && "$ip" == "$local_v4" ]]; then match_found=1; fi
+        if [[ -n "$local_v6" && "$ip" == "$local_v6" ]]; then match_found=1; fi
+    done
+
+    if [[ $match_found -eq 1 ]]; then
+        green "檢測通過：域名 IP 與本機 IP 一致。"
+        return 0
+    else
+        echo
+        red "=========================================="
+        red " [警告] 域名解析 IP 與本機 IP 不一致！"
+        red "=========================================="
+        echo -e " 域名 ($domain) 解析 IP :\n${yellow}${domain_ips}${plain}"
+        echo -e " 本機 IP (IPv4)        : ${yellow}${local_v4:-未檢測到}${plain}"
+        echo -e " 本機 IP (IPv6)        : ${yellow}${local_v6:-未檢測到}${plain}"
+        echo
+        yellow "可能原因："
+        echo "1. 域名開啟了 CDN (如 Cloudflare 小黃雲) -> 若確認，請強制繼續"
+        echo "2. 域名 DNS 尚未生效或填寫錯誤 -> 請取消並檢查"
+        echo "3. 本機位於 NAT 內網 (如 AWS/GCP/Oracle) -> 若確認，請強制繼續"
+        echo
+        readp "是否強制繼續申請？[y/N] (默認 N): " force_choice
+        if [[ "$force_choice" == "y" || "$force_choice" == "Y" ]]; then
+            yellow "用戶選擇強制繼續操作..."
+            return 0
+        else
+            red "操作已取消，請檢查 DNS 設置。"
+            return 1
+        fi
+    fi
+}
 
 get_current_cert_info() {
     if [[ -n $(~/.acme.sh/acme.sh -v 2>/dev/null) ]]; then
@@ -111,12 +146,14 @@ issue_cert_core() {
     
     mkdir -p "$CERT_DIR"
 
+    check_domain_consistency "$domain"
+    if [[ $? -ne 0 ]]; then return 1; fi
+
     if [[ "$mode" == "standalone" ]]; then
         if lsof -i :80 | grep -q LISTEN; then
-            yellow "檢測到 80 端口被佔用！Standalone 模式需要獨佔 80 端口。"
+            yellow "檢測到 80 端口被佔用！"
             readp "是否強制釋放 80 端口？[Y/n] (默認Y): " kill_choice
             if [[ -z "$kill_choice" || "$kill_choice" == "y" || "$kill_choice" == "Y" ]]; then
-                yellow "正在執行強制釋放..."
                 lsof -i :80 | grep -v "PID" | awk '{print "kill -9",$2}' | sh >/dev/null 2>&1
                 sleep 2
                 green "80 端口已釋放！"
@@ -138,7 +175,7 @@ issue_cert_core() {
     fi
 
     if [[ $? -ne 0 ]]; then
-        red "證書申請失敗！請檢查 IP/域名/防火牆設置。"
+        red "證書申請失敗！請檢查報錯信息。"
         return 1
     fi
 
@@ -238,7 +275,8 @@ action_uninstall() {
     readp "確定要卸載腳本並清理證書嗎？[y/N]: " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
         "$ACME_HOME"/acme.sh --uninstall
-        rm -rf "$ACME_HOME" "$CERT_DIR" "/usr/bin/acme"
+        # 修改點：卸載同時刪除 /usr/bin/ac 和舊的 /usr/bin/acme
+        rm -rf "$ACME_HOME" "$CERT_DIR" "/usr/bin/ac" "/usr/bin/acme"
         sed -i '/acme.sh/d' ~/.bashrc
         green "卸載完成。"
     else
@@ -250,16 +288,14 @@ action_uninstall() {
 show_menu() {
     clear
     check_root
-    # 創建快捷方式 (如果不存在)
     create_shortcut
-    
     install_deps
     install_acme_core
     get_current_cert_info
 
     green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"           
-    echo -e "${bblue}   Acme Pro Script (v3.1 Fast)     ${plain}"
-    echo -e "${bblue}   快捷命令: 輸入 acme 即可再次運行  ${plain}"
+    echo -e "${bblue}   Acme Pro Script (v3.3)          ${plain}"
+    echo -e "${bblue}   快捷命令: 輸入 ac 即可再次運行    ${plain}"
     green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
     echo
     red "========================================================================="
@@ -287,7 +323,6 @@ show_menu() {
 }
 
 # --- 7. 入口 ---
-# 確保腳本保存到本地，以便快捷命令生效
 if [[ ! -f "$SCRIPT_PATH" ]] && [[ -f "$0" ]]; then
     cp "$0" "$SCRIPT_PATH"
 fi
