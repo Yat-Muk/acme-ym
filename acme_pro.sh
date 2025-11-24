@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Acme Pro v3.7
+# Acme Pro v3.9
 # ==========================================
 
 # --- 1. UI 與配色定義 ---
@@ -20,6 +20,7 @@ readp(){ read -p "$(yellow "$1")" $2;}
 CERT_DIR="/root/cert"
 ACME_HOME="$HOME/.acme.sh"
 SCRIPT_PATH="/root/acme_pro.sh"
+REMOTE_URL="https://raw.githubusercontent.com/Yat-Muk/acme-ym/master/acme_pro.sh"
 
 # --- 3. 基礎功能 ---
 check_root() {
@@ -28,31 +29,42 @@ check_root() {
 
 install_deps() {
     local deps_missing=0
-    for cmd in curl socat cron lsof tar; do
+    for cmd in curl socat cron lsof tar wget; do
         if ! command -v $cmd &> /dev/null; then
             deps_missing=1
         fi
     done
 
     if [ $deps_missing -eq 1 ]; then
-        green "正在後台補全依賴 (curl, socat, cron)..."
+        green "正在後台補全依賴..."
         if [ -f /etc/debian_version ]; then
             apt update -y >/dev/null 2>&1
-            apt install -y curl socat tar cron lsof >/dev/null 2>&1
+            apt install -y curl socat tar cron lsof wget >/dev/null 2>&1
         elif [ -f /etc/redhat-release ]; then
             yum install -y epel-release >/dev/null 2>&1
-            yum install -y curl socat tar cronie lsof >/dev/null 2>&1
+            yum install -y curl socat tar cronie lsof wget >/dev/null 2>&1
         fi
     fi
 }
 
+# [核心修復] 創建快捷方式增強版
 create_shortcut() {
-    if [[ ! -f "$SCRIPT_PATH" ]] && [[ -f "$0" ]]; then
-        cp "$0" "$SCRIPT_PATH"
-    fi
-    if [[ -f "$SCRIPT_PATH" ]] && [[ ! -f /usr/bin/ac-pro ]]; then
+    # 1. 檢測腳本文件是否存在，不存在則從雲端下載 (修復內存運行問題)
+    if [[ ! -f "$SCRIPT_PATH" ]]; then
+        green "檢測到腳本未安裝到本地，正在執行自我安裝..."
+        wget -q -O "$SCRIPT_PATH" "$REMOTE_URL"
+        if [[ ! -f "$SCRIPT_PATH" ]]; then
+             # 如果 wget 失敗，嘗試 curl
+             curl -s -o "$SCRIPT_PATH" "$REMOTE_URL"
+        fi
         chmod +x "$SCRIPT_PATH"
+    fi
+
+    # 2. 創建快捷指令
+    if [[ -f "$SCRIPT_PATH" ]] && [[ ! -f /usr/bin/ac-pro ]]; then
         ln -sf "$SCRIPT_PATH" /usr/bin/ac-pro
+        chmod +x /usr/bin/ac-pro
+        green "快捷命令 ac-pro 已成功創建！"
     fi
 }
 
@@ -92,7 +104,7 @@ check_domain_consistency() {
     
     if [[ -z "$domain_ips" ]]; then
         red "錯誤：無法解析域名 $domain，請檢查 DNS 設置。"
-        return 1
+        return 2 
     fi
 
     local match_found=0
@@ -117,7 +129,6 @@ check_domain_consistency() {
         if [[ "$force_choice" == "y" || "$force_choice" == "Y" ]]; then
             return 0
         else
-            red "操作已取消。"
             return 1
         fi
     fi
@@ -142,9 +153,6 @@ issue_cert_core() {
     local dns_type=$3
     
     mkdir -p "$CERT_DIR"
-
-    check_domain_consistency "$domain"
-    if [[ $? -ne 0 ]]; then return 1; fi
 
     if [[ "$mode" == "standalone" ]]; then
         if lsof -i :80 | grep -q LISTEN; then
@@ -202,10 +210,23 @@ action_apply_standalone() {
         if [[ "$ym" == "0" ]]; then return; fi
         if [[ -z "$ym" ]]; then
             red "域名不能為空，請重新輸入。"
-        else
+            continue
+        fi
+
+        check_domain_consistency "$ym"
+        check_result=$?
+        
+        if [[ $check_result -eq 0 ]]; then
             break
+        elif [[ $check_result -eq 2 ]]; then
+            continue
+        else
+            echo
+            yellow "請重新確認域名後輸入..."
+            continue
         fi
     done
+
     green "域名: $ym" && sleep 1
     issue_cert_core "$ym" "standalone"
 }
@@ -217,10 +238,23 @@ action_apply_dns() {
         if [[ "$ym" == "0" ]]; then return; fi
         if [[ -z "$ym" ]]; then
             red "域名不能為空，請重新輸入。"
-        else
+            continue
+        fi
+
+        check_domain_consistency "$ym"
+        check_result=$?
+
+        if [[ $check_result -eq 0 ]]; then
             break
+        elif [[ $check_result -eq 2 ]]; then
+            continue
+        else
+            echo
+            yellow "請重新確認域名後輸入..."
+            continue
         fi
     done
+
     green "域名: $ym" && sleep 1
     
     echo -e "請選擇 DNS 服務商：\n1.Cloudflare\n2.騰訊雲DNSPod\n3.阿里雲Aliyun"
@@ -337,8 +371,7 @@ show_menu() {
     get_current_cert_info
 
     green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"           
-    echo -e "${bblue}   Acme Pro Script (v3.7)          ${plain}"
-    echo -e "${bblue}   Github項目：github.com/Yat-Muk/acme-ym ${plain}"
+    echo -e "${bblue}   Acme Pro Script (v3.9)          ${plain}"
     echo -e "${bblue}   快捷命令: 輸入 ac-pro 即可再次運行 ${plain}"
     green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
     echo
@@ -367,9 +400,8 @@ show_menu() {
 }
 
 # --- 7. 入口 ---
-if [[ ! -f "$SCRIPT_PATH" ]] && [[ -f "$0" ]]; then
-    cp "$0" "$SCRIPT_PATH"
-fi
+# 確保每次運行都嘗試修復快捷指令 (如果丟失)
+create_shortcut
 
 if [[ "$1" == "--source-only" ]]; then return 0 2>/dev/null || exit 0; fi
 show_menu
