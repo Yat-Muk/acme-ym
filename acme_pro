@@ -1,0 +1,242 @@
+#!/bin/bash
+
+# ==========================================
+# 專業版 ACME 證書管理腳本 (v2.0)
+# 基於 acme.sh 內核
+# 特性：交互式 80 端口釋放
+# ==========================================
+
+# --- 變量定義 ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+PLAIN='\033[0m'
+
+CERT_DIR="/root/cert"
+ACME_HOME="$HOME/.acme.sh"
+
+# --- 幫助函數 ---
+
+log_info() { echo -e "${GREEN}[INFO] $1${PLAIN}"; }
+log_warn() { echo -e "${YELLOW}[WARN] $1${PLAIN}"; }
+log_err()  { echo -e "${RED}[ERROR] $1${PLAIN}"; }
+
+check_root() {
+    [[ $EUID -ne 0 ]] && log_err "請以 root 權限運行此腳本" && exit 1
+}
+
+install_deps() {
+    log_info "檢查並安裝依賴..."
+    if [ -f /etc/debian_version ]; then
+        apt update -y && apt install -y curl socat tar cron lsof
+    elif [ -f /etc/redhat-release ]; then
+        yum install -y epel-release
+        yum install -y curl socat tar cronie lsof
+    else
+        log_err "不支持的系統發行版"
+        exit 1
+    fi
+}
+
+install_acme_core() {
+    if [[ ! -f "$ACME_HOME/acme.sh" ]]; then
+        log_info "正在安裝 acme.sh 核心..."
+        read -p "請輸入註冊郵箱 (回車自動生成): " user_email
+        if [[ -z "$user_email" ]]; then
+            auto_prefix=$(date +%s%N | md5sum | cut -c 1-6)
+            user_email="${auto_prefix}@gmail.com"
+        fi
+        curl https://get.acme.sh | sh -s email="$user_email"
+        source ~/.bashrc
+    else
+        log_info "acme.sh 已安裝，執行更新..."
+        "$ACME_HOME"/acme.sh --upgrade --auto-upgrade
+    fi
+}
+
+# --- 核心功能函數 ---
+
+# 功能 1: 申請並安裝證書 (核心邏輯)
+issue_cert_core() {
+    local domain=$1
+    local mode=$2 # standalone 或 dns
+    local dns_type=$3 # dns_cf, dns_dp, dns_ali (僅在 mode=dns 時需要)
+    
+    # 創建目錄
+    mkdir -p "$CERT_DIR"
+
+    # 申請邏輯
+    if [[ "$mode" == "standalone" ]]; then
+        # 80 端口檢測與交互式釋放邏輯
+        if lsof -i :80 | grep -q LISTEN; then
+            log_warn "檢測到 80 端口正在被以下進程佔用："
+            echo -e "${RED}----------------------------------------${PLAIN}"
+            lsof -i :80
+            echo -e "${RED}----------------------------------------${PLAIN}"
+            log_warn "Standalone 模式需要獨佔 80 端口才能完成驗證。"
+            
+            # [Y/n] 表示默認為 Yes
+            read -p "是否強制殺死上述進程以釋放端口？[Y/n] (默認: Y): " kill_choice
+            
+            # 如果變量為空 (直接回車) 或者 為 y/Y，則執行
+            if [[ -z "$kill_choice" || "$kill_choice" == "y" || "$kill_choice" == "Y" ]]; then
+                log_warn "正在執行強制釋放..."
+                lsof -i :80 | grep -v "PID" | awk '{print "kill -9",$2}' | sh >/dev/null 2>&1
+                sleep 2
+                log_info "80 端口清理完畢，繼續執行。"
+            else
+                log_err "用戶取消操作。請手動停止相關服務 (如 nginx/caddy) 後再次運行。"
+                return 1
+            fi
+        else
+            log_info "80 端口空閒，準備開始。"
+        fi
+
+        "$ACME_HOME"/acme.sh --issue -d "$domain" --standalone -k ec-256 --force
+    
+    elif [[ "$mode" == "dns" ]]; then
+        "$ACME_HOME"/acme.sh --issue --dns "$dns_type" -d "$domain" -d "*.$domain" --force
+    fi
+
+    # 檢查申請結果
+    if [[ $? -ne 0 ]]; then
+        log_err "證書申請失敗，請檢查日誌或參數。"
+        return 1
+    fi
+
+    # 安裝證書 (複製到指定目錄)
+    log_info "正在安裝證書到 $CERT_DIR ..."
+    "$ACME_HOME"/acme.sh --install-cert -d "$domain" \
+        --key-file       "$CERT_DIR/private.key"  \
+        --fullchain-file "$CERT_DIR/cert.crt" \
+        --ecc
+
+    if [[ -s "$CERT_DIR/private.key" ]]; then
+        log_info "證書部署成功！"
+        echo -e "公鑰路徑: ${GREEN}$CERT_DIR/cert.crt${PLAIN}"
+        echo -e "私鑰路徑: ${GREEN}$CERT_DIR/private.key${PLAIN}"
+        return 0
+    else
+        log_err "證書文件未生成，請檢查權限。"
+        return 1
+    fi
+}
+
+# 菜單功能 1.1: Standalone 模式
+menu_standalone() {
+    read -p "請輸入域名: " domain
+    issue_cert_core "$domain" "standalone"
+}
+
+# 菜單功能 1.2: DNS API 模式
+menu_dns() {
+    read -p "請輸入域名 (不要帶 *): " domain
+    echo -e "請選擇 DNS 服務商:"
+    echo -e "1. Cloudflare"
+    echo -e "2. 騰訊雲 (DNSPod)"
+    echo -e "3. 阿里雲"
+    read -p "選擇: " dns_select
+
+    case "$dns_select" in
+        1)
+            read -p "Cloudflare Global API Key: " cf_key
+            read -p "Cloudflare Email: " cf_email
+            export CF_Key="$cf_key"
+            export CF_Email="$cf_email"
+            issue_cert_core "$domain" "dns" "dns_cf"
+            ;;
+        2)
+            read -p "DNSPod ID: " dp_id
+            read -p "DNSPod Key: " dp_key
+            export DP_Id="$dp_id"
+            export DP_Key="$dp_key"
+            issue_cert_core "$domain" "dns" "dns_dp"
+            ;;
+        3)
+            read -p "Aliyun Key: " ali_key
+            read -p "Aliyun Secret: " ali_secret
+            export Ali_Key="$ali_key"
+            export Ali_Secret="$ali_secret"
+            issue_cert_core "$domain" "dns" "dns_ali"
+            ;;
+        *)
+            log_err "輸入錯誤"
+            ;;
+    esac
+}
+
+# 菜單功能 2: 查看證書
+list_certs() {
+    "$ACME_HOME"/acme.sh --list
+    if [[ -f "$CERT_DIR/cert.crt" ]]; then
+        echo -e "\n當前已部署證書："
+        ls -lh "$CERT_DIR/"
+    fi
+}
+
+# 菜單功能 3: 強制續期
+renew_certs() {
+    log_info "正在強制續期所有證書..."
+    "$ACME_HOME"/acme.sh --cron --force
+    list_certs
+}
+
+# 菜單功能 4: 卸載
+uninstall_all() {
+    log_warn "這將卸載 acme.sh 並刪除證書文件。"
+    read -p "確認執行? (y/n): " confirm
+    if [[ "$confirm" == "y" ]]; then
+        "$ACME_HOME"/acme.sh --uninstall
+        rm -rf "$ACME_HOME"
+        rm -rf "$CERT_DIR"
+        sed -i '/acme.sh/d' ~/.bashrc
+        log_info "卸載完成。"
+    fi
+}
+
+# --- 菜單界面 ---
+
+show_menu() {
+    clear
+    echo -e "${BLUE}=============================================${PLAIN}"
+    echo -e "   Acme.sh 證書申請腳本 (專業版)"
+    echo -e "${BLUE}=============================================${PLAIN}"
+    echo -e " 1. 申請證書 (支持 80 端口 / DNS API)"
+    echo -e " 2. 查看已申請證書 & 路徑"
+    echo -e " 3. 手動一鍵續期"
+    echo -e " 4. 卸載腳本 & 清理環境"
+    echo -e " 0. 退出"
+    echo -e "${BLUE}=============================================${PLAIN}"
+    read -p " 請選擇 [0-4]: " num
+
+    case "$num" in
+        1)
+            echo -e "請選擇模式："
+            echo -e "1. 獨立 80 端口模式 (適合小白用戶，只需輸入域名)"
+            echo -e "2. DNS API 模式 (支持泛域名，需 API Key)"
+            read -p "選擇: " mode_opt
+            if [[ "$mode_opt" == "1" ]]; then menu_standalone; fi
+            if [[ "$mode_opt" == "2" ]]; then menu_dns; fi
+            ;;
+        2) list_certs ;;
+        3) renew_certs ;;
+        4) uninstall_all ;;
+        0) exit 0 ;;
+        *) log_err "無效選擇"; exit 1 ;;
+    esac
+}
+
+# --- 入口邏輯 ---
+
+check_root
+install_deps
+install_acme_core
+
+# 支持 --source-only 參數，供外部腳本調用函數而不執行菜單
+if [[ "$1" == "--source-only" ]]; then
+    return 0 2>/dev/null || exit 0
+fi
+
+# 正常運行顯示菜單
+show_menu
