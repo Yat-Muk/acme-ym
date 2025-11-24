@@ -4,7 +4,7 @@
 
 ## 一鍵腳本
 ```bash
-curl -Ls https://raw.githubusercontent.com/Yat-Muk/acme-ym/master/acme_pro.sh | bash
+bash <(curl -Ls https://raw.githubusercontent.com/Yat-Muk/acme-ym/master/acme_pro.sh)
 ```
 --------------------------------------------------------------
 
