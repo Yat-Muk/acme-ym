@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Acme Pro v4.1
+# Acme Pro v4.2
 # ==========================================
 
 # --- 1. UI 與配色定義 ---
@@ -21,6 +21,7 @@ CERT_DIR="/root/cert"
 ACME_HOME="$HOME/.acme.sh"
 SCRIPT_PATH="/root/acme_pro.sh"
 REMOTE_URL="https://raw.githubusercontent.com/Yat-Muk/acme-ym/master/acme_pro.sh"
+CA_LOG="$CERT_DIR/ca.log" # 定義日誌文件路徑
 
 # --- 3. 基礎功能 ---
 check_root() {
@@ -194,6 +195,11 @@ issue_cert_core() {
         green "證書申請成功！"
         yellow "公鑰: $CERT_DIR/cert.crt"
         yellow "密鑰: $CERT_DIR/private.key"
+        
+        # [核心新增] 將域名寫入日誌文件，供 sing-box-ym 調用
+        echo "$domain" > "$CA_LOG"
+        green "域名已寫入配置日誌: $CA_LOG"
+        
         return 0
     else
         red "證書安裝失敗。"
@@ -297,6 +303,11 @@ action_list_certs() {
     if [[ -f "$CERT_DIR/cert.crt" ]]; then
         blue "本地文件路徑 ($CERT_DIR):"
         ls -lh "$CERT_DIR/"
+        # 顯示 ca.log 內容（如果存在）
+        if [[ -f "$CA_LOG" ]]; then
+            echo
+            blue "當前記錄的域名 (ca.log): $(cat "$CA_LOG")"
+        fi
     fi
     back_to_menu
 }
@@ -317,15 +328,15 @@ action_revoke_delete() {
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
         "$ACME_HOME"/acme.sh --revoke -d "$ym" --ecc
         "$ACME_HOME"/acme.sh --remove -d "$ym" --ecc
-        rm -f "$CERT_DIR/cert.crt" "$CERT_DIR/private.key" "$CERT_DIR/fullchain.cer" "$CERT_DIR/$ym.key"
-        green "已撤銷並刪除。"
+        # [同步刪除 ca.log]
+        rm -f "$CERT_DIR/cert.crt" "$CERT_DIR/private.key" "$CERT_DIR/fullchain.cer" "$CERT_DIR/$ym.key" "$CA_LOG"
+        green "已撤銷並刪除 (含 ca.log)。"
     else
         yellow "已取消。"
     fi
     back_to_menu
 }
 
-# [優化] 續期保護邏輯
 action_renew() {
     green "正在獲取證書狀態..."
     bash ~/.acme.sh/acme.sh --list
@@ -395,8 +406,8 @@ show_menu() {
     get_current_cert_info
 
     green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
-    echo -e "${bblue}   項目地址：https://github.com/Yat-Muk/acme-ym ${plain}"          
-    echo -e "${bblue}   Acme Pro Script (v4.1)          ${plain}"
+    echo -e "${bblue}   項目地址：https://github.com/Yat-Muk/acme-ym ${plain}"           
+    echo -e "${bblue}   Acme Pro Script (v4.2)          ${plain}"
     echo -e "${bblue}   快捷命令: 輸入 ac-pro 即可再次運行 ${plain}"
     green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
     echo
