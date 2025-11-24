@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Acme Pro v3.6
-# 快捷指令更新為 'ac-pro'
+# Acme Pro v3.7
 # ==========================================
 
 # --- 1. UI 與配色定義 ---
@@ -51,19 +50,15 @@ create_shortcut() {
     if [[ ! -f "$SCRIPT_PATH" ]] && [[ -f "$0" ]]; then
         cp "$0" "$SCRIPT_PATH"
     fi
-    # 快捷命令為 ac-pro
     if [[ -f "$SCRIPT_PATH" ]] && [[ ! -f /usr/bin/ac-pro ]]; then
         chmod +x "$SCRIPT_PATH"
         ln -sf "$SCRIPT_PATH" /usr/bin/ac-pro
     fi
 }
 
-# 啟動時自動安裝，不詢問
 install_acme_core_silent() {
     if [[ ! -f "$ACME_HOME/acme.sh" ]]; then
-        # 生成隨機郵箱
         local auto_email="$(date +%s%N | md5sum | cut -c 1-6)@gmail.com"
-        # 靜默安裝
         curl https://get.acme.sh | sh -s email="$auto_email" >/dev/null 2>&1
         source ~/.bashrc
     else
@@ -71,7 +66,6 @@ install_acme_core_silent() {
     fi
 }
 
-# 申請證書時的郵箱確認邏輯
 check_and_update_email() {
     echo
     yellow "當前使用默認隨機郵箱註冊。"
@@ -202,15 +196,31 @@ issue_cert_core() {
 # --- 5. 菜單動作 (Action) ---
 
 action_apply_standalone() {
-    check_and_update_email # 詢問郵箱
-    readp "請輸入解析完成的域名: " ym
+    check_and_update_email
+    while true; do
+        readp "請輸入解析完成的域名 (輸入 0 返回): " ym
+        if [[ "$ym" == "0" ]]; then return; fi
+        if [[ -z "$ym" ]]; then
+            red "域名不能為空，請重新輸入。"
+        else
+            break
+        fi
+    done
     green "域名: $ym" && sleep 1
     issue_cert_core "$ym" "standalone"
 }
 
 action_apply_dns() {
-    check_and_update_email # 詢問郵箱
-    readp "請輸入主域名 (不要帶*): " ym
+    check_and_update_email
+    while true; do
+        readp "請輸入主域名 (不要帶*，輸入 0 返回): " ym
+        if [[ "$ym" == "0" ]]; then return; fi
+        if [[ -z "$ym" ]]; then
+            red "域名不能為空，請重新輸入。"
+        else
+            break
+        fi
+    done
     green "域名: $ym" && sleep 1
     
     echo -e "請選擇 DNS 服務商：\n1.Cloudflare\n2.騰訊雲DNSPod\n3.阿里雲Aliyun"
@@ -256,8 +266,15 @@ action_list_certs() {
 
 action_revoke_delete() {
     action_list_certs
-    readp "請輸入要刪除的域名 (Main_Domain): " ym
-    if [[ -z "$ym" ]]; then red "域名不能為空"; return; fi
+    while true; do
+        readp "請輸入要刪除的域名 (Main_Domain) (輸入 0 返回): " ym
+        if [[ "$ym" == "0" ]]; then return; fi
+        if [[ -z "$ym" ]]; then
+            red "域名不能為空，請重新輸入。"
+        else
+            break
+        fi
+    done
 
     readp "確定要刪除 $ym 嗎？(含文件清理) [y/N]: " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
@@ -277,18 +294,37 @@ action_renew() {
 }
 
 action_uninstall() {
-    readp "確定要卸載腳本並清理證書嗎？[y/N]: " confirm
-    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        if [[ -f "$ACME_HOME/acme.sh" ]]; then
-            "$ACME_HOME"/acme.sh --uninstall
-        fi
-        # 同時清理舊的 ac/acme 快捷方式，確保乾淨
-        rm -rf "$ACME_HOME" "$CERT_DIR" "/usr/bin/ac-pro" "/usr/bin/ac" "/usr/bin/acme"
-        sed -i '/acme.sh/d' ~/.bashrc
-        green "卸載完成。"
-    else
-        yellow "已取消。"
-    fi
+    echo
+    yellow "請選擇卸載模式："
+    echo -e " 1. ${green}僅卸載本腳本${plain} (保留 acme.sh 核心、證書文件、續期任務)"
+    echo -e " 2. ${red}徹底卸載${plain} (移除所有組件、證書、配置)"
+    echo -e " 0. 取消"
+    echo
+    readp "請選擇 [0-2]: " un_opt
+
+    case "$un_opt" in
+        1)
+            rm -f "$SCRIPT_PATH" "/usr/bin/ac-pro" "/usr/bin/ac" "/usr/bin/acme"
+            green "腳本已移除。您的證書和自動續期任務依然有效。"
+            green "如需管理證書，請手動使用 ~/.acme.sh/acme.sh 命令。"
+            ;;
+        2)
+            readp "警告：這將刪除所有證書文件！確認執行？[y/N]: " confirm
+            if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+                if [[ -f "$ACME_HOME/acme.sh" ]]; then
+                    "$ACME_HOME"/acme.sh --uninstall
+                fi
+                rm -rf "$ACME_HOME" "$CERT_DIR" "$SCRIPT_PATH" "/usr/bin/ac-pro" "/usr/bin/ac" "/usr/bin/acme"
+                sed -i '/acme.sh/d' ~/.bashrc
+                green "徹底卸載完成，環境已清理。"
+            else
+                yellow "已取消。"
+            fi
+            ;;
+        *)
+            yellow "已取消。"
+            ;;
+    esac
 }
 
 # --- 6. 主菜單 ---
@@ -301,7 +337,8 @@ show_menu() {
     get_current_cert_info
 
     green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"           
-    echo -e "${bblue}   Acme Pro Script (v3.6)          ${plain}"
+    echo -e "${bblue}   Acme Pro Script (v3.7)          ${plain}"
+    echo -e "${bblue}   Github項目：github.com/Yat-Muk/acme-ym ${plain}"
     echo -e "${bblue}   快捷命令: 輸入 ac-pro 即可再次運行 ${plain}"
     green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
     echo
