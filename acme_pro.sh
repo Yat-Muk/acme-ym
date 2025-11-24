@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Acme Pro v4.0
+# Acme Pro v4.1
 # ==========================================
 
 # --- 1. UI 與配色定義 ---
@@ -86,7 +86,6 @@ check_and_update_email() {
     echo
 }
 
-# 返回主菜單函數
 back_to_menu() {
     echo
     read -n 1 -s -r -p "按任意鍵返回主菜單..."
@@ -208,7 +207,7 @@ action_apply_standalone() {
     check_and_update_email
     while true; do
         readp "請輸入解析完成的域名 (輸入 0 返回): " ym
-        if [[ "$ym" == "0" ]]; then show_menu; return; fi # 返回主菜單
+        if [[ "$ym" == "0" ]]; then show_menu; return; fi
         if [[ -z "$ym" ]]; then
             red "域名不能為空，請重新輸入。"
             continue
@@ -230,14 +229,14 @@ action_apply_standalone() {
 
     green "域名: $ym" && sleep 1
     issue_cert_core "$ym" "standalone"
-    back_to_menu # 執行完畢返回菜單
+    back_to_menu
 }
 
 action_apply_dns() {
     check_and_update_email
     while true; do
         readp "請輸入主域名 (不要帶*，輸入 0 返回): " ym
-        if [[ "$ym" == "0" ]]; then show_menu; return; fi # 返回主菜單
+        if [[ "$ym" == "0" ]]; then show_menu; return; fi
         if [[ -z "$ym" ]]; then
             red "域名不能為空，請重新輸入。"
             continue
@@ -276,7 +275,7 @@ action_apply_dns() {
             issue_cert_core "$ym" "dns" "dns_ali" ;;
         * ) red "輸入錯誤" && exit 1 ;;
     esac
-    back_to_menu # 執行完畢返回菜單
+    back_to_menu
 }
 
 action_apply_menu() {
@@ -299,14 +298,14 @@ action_list_certs() {
         blue "本地文件路徑 ($CERT_DIR):"
         ls -lh "$CERT_DIR/"
     fi
-    back_to_menu # 執行完畢返回菜單
+    back_to_menu
 }
 
 action_revoke_delete() {
-    action_list_certs # 這裡不要調用 back_to_menu，因為還沒執行完
+    action_list_certs # 不調用 back_to_menu
     while true; do
         readp "請輸入要刪除的域名 (Main_Domain) (輸入 0 返回): " ym
-        if [[ "$ym" == "0" ]]; then show_menu; return; fi # 返回主菜單
+        if [[ "$ym" == "0" ]]; then show_menu; return; fi
         if [[ -z "$ym" ]]; then
             red "域名不能為空，請重新輸入。"
         else
@@ -323,14 +322,29 @@ action_revoke_delete() {
     else
         yellow "已取消。"
     fi
-    back_to_menu # 執行完畢返回菜單
+    back_to_menu
 }
 
+# [優化] 續期保護邏輯
 action_renew() {
-    green "正在強制續期..."
-    "$ACME_HOME"/acme.sh --cron --force
-    green "續期完成。"
-    back_to_menu # 執行完畢返回菜單
+    green "正在獲取證書狀態..."
+    bash ~/.acme.sh/acme.sh --list
+    echo
+    yellow "-------------------------------------------------------------"
+    yellow " 注意：Acme.sh 已經配置了自動續期任務 (Cron)，無需手動干預。"
+    yellow " 僅在證書顯示「過期」或需要立即修復時，才建議強制續期。"
+    yellow " 頻繁強制續期可能導致域名被 CA 機構暫時封鎖。"
+    yellow "-------------------------------------------------------------"
+    echo
+    readp "確認要強制續期所有證書嗎？[y/N]: " renew_confirm
+    if [[ "$renew_confirm" == "y" || "$renew_confirm" == "Y" ]]; then
+        green "正在執行強制續期..."
+        "$ACME_HOME"/acme.sh --cron --force
+        green "續期命令已執行完畢。"
+    else
+        green "已取消操作。"
+    fi
+    back_to_menu
 }
 
 action_uninstall() {
@@ -347,7 +361,7 @@ action_uninstall() {
             rm -f "$SCRIPT_PATH" "/usr/bin/ac-pro" "/usr/bin/ac" "/usr/bin/acme"
             green "腳本已移除。您的證書和自動續期任務依然有效。"
             green "如需管理證書，請手動使用 ~/.acme.sh/acme.sh 命令。"
-            exit 0 # 卸載成功，退出腳本
+            exit 0
             ;;
         2)
             readp "警告：這將刪除所有證書文件！確認執行？[y/N]: " confirm
@@ -358,7 +372,7 @@ action_uninstall() {
                 rm -rf "$ACME_HOME" "$CERT_DIR" "$SCRIPT_PATH" "/usr/bin/ac-pro" "/usr/bin/ac" "/usr/bin/acme"
                 sed -i '/acme.sh/d' ~/.bashrc
                 green "徹底卸載完成，環境已清理。"
-                exit 0 # 卸載成功，退出腳本
+                exit 0
             else
                 yellow "已取消。"
                 back_to_menu
@@ -380,9 +394,9 @@ show_menu() {
     install_acme_core_silent
     get_current_cert_info
 
-    green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"           
-    echo -e "${bblue}   項目地址：https://github.com/Yat-Muk/acme-ym ${plain}"
-    echo -e "${bblue}   Acme Pro Script (v4.0)          ${plain}"
+    green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
+    echo -e "${bblue}   項目地址：https://github.com/Yat-Muk/acme-ym ${plain}"          
+    echo -e "${bblue}   Acme Pro Script (v4.1)          ${plain}"
     echo -e "${bblue}   快捷命令: 輸入 ac-pro 即可再次運行 ${plain}"
     green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
     echo
