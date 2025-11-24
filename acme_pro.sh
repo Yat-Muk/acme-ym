@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # ==========================================
-# Acme Pro v3.3
+# Acme Pro v3.6
+# 快捷指令更新為 'ac-pro'
 # ==========================================
 
 # --- 1. UI 與配色定義 ---
@@ -35,17 +36,14 @@ install_deps() {
     done
 
     if [ $deps_missing -eq 1 ]; then
-        green "發現缺失依賴，正在安裝..."
+        green "正在後台補全依賴 (curl, socat, cron)..."
         if [ -f /etc/debian_version ]; then
             apt update -y >/dev/null 2>&1
             apt install -y curl socat tar cron lsof >/dev/null 2>&1
         elif [ -f /etc/redhat-release ]; then
             yum install -y epel-release >/dev/null 2>&1
             yum install -y curl socat tar cronie lsof >/dev/null 2>&1
-        else
-            red "不支持當前的系統，請使用 Debian/Ubuntu/CentOS" && exit 1
         fi
-        green "依賴安裝完成。"
     fi
 }
 
@@ -53,28 +51,39 @@ create_shortcut() {
     if [[ ! -f "$SCRIPT_PATH" ]] && [[ -f "$0" ]]; then
         cp "$0" "$SCRIPT_PATH"
     fi
-    if [[ -f "$SCRIPT_PATH" ]] && [[ ! -f /usr/bin/ac ]]; then
+    # 快捷命令為 ac-pro
+    if [[ -f "$SCRIPT_PATH" ]] && [[ ! -f /usr/bin/ac-pro ]]; then
         chmod +x "$SCRIPT_PATH"
-        ln -sf "$SCRIPT_PATH" /usr/bin/ac
-        green "快捷命令已創建！以後輸入 'ac' 即可進入菜單。"
-        sleep 1
+        ln -sf "$SCRIPT_PATH" /usr/bin/ac-pro
     fi
 }
 
-install_acme_core() {
+# 啟動時自動安裝，不詢問
+install_acme_core_silent() {
     if [[ ! -f "$ACME_HOME/acme.sh" ]]; then
-        green "正在安裝 acme.sh 核心..."
-        readp "請輸入註冊所需的郵箱（回車跳過則自動生成虛擬gmail郵箱）：" Aemail
-        if [ -z "$Aemail" ]; then
-            auto_prefix=$(date +%s%N | md5sum | cut -c 1-6)
-            Aemail="${auto_prefix}@gmail.com"
-        fi
-        yellow "當前註冊的郵箱名稱：$Aemail"
-        curl https://get.acme.sh | sh -s email="$Aemail"
+        # 生成隨機郵箱
+        local auto_email="$(date +%s%N | md5sum | cut -c 1-6)@gmail.com"
+        # 靜默安裝
+        curl https://get.acme.sh | sh -s email="$auto_email" >/dev/null 2>&1
         source ~/.bashrc
     else
         "$ACME_HOME"/acme.sh --upgrade --auto-upgrade >/dev/null 2>&1
     fi
+}
+
+# 申請證書時的郵箱確認邏輯
+check_and_update_email() {
+    echo
+    yellow "當前使用默認隨機郵箱註冊。"
+    readp "是否更換為自己的郵箱？(建議更換，回車則跳過): " new_email
+    if [[ -n "$new_email" ]]; then
+        green "正在更新賬戶郵箱為: $new_email ..."
+        "$ACME_HOME"/acme.sh --register-account -m "$new_email" >/dev/null 2>&1
+        green "郵箱更新成功。"
+    else
+        green "保持默認郵箱，繼續執行..."
+    fi
+    echo
 }
 
 # --- 4. 業務邏輯 (內核) ---
@@ -110,24 +119,18 @@ check_domain_consistency() {
         echo -e " 本機 IP (IPv4)        : ${yellow}${local_v4:-未檢測到}${plain}"
         echo -e " 本機 IP (IPv6)        : ${yellow}${local_v6:-未檢測到}${plain}"
         echo
-        yellow "可能原因："
-        echo "1. 域名開啟了 CDN (如 Cloudflare 小黃雲) -> 若確認，請強制繼續"
-        echo "2. 域名 DNS 尚未生效或填寫錯誤 -> 請取消並檢查"
-        echo "3. 本機位於 NAT 內網 (如 AWS/GCP/Oracle) -> 若確認，請強制繼續"
-        echo
         readp "是否強制繼續申請？[y/N] (默認 N): " force_choice
         if [[ "$force_choice" == "y" || "$force_choice" == "Y" ]]; then
-            yellow "用戶選擇強制繼續操作..."
             return 0
         else
-            red "操作已取消，請檢查 DNS 設置。"
+            red "操作已取消。"
             return 1
         fi
     fi
 }
 
 get_current_cert_info() {
-    if [[ -n $(~/.acme.sh/acme.sh -v 2>/dev/null) ]]; then
+    if [[ -f "$ACME_HOME/acme.sh" ]]; then
         local main_domain=$(bash ~/.acme.sh/acme.sh --list | grep -v "Main_Domain" | head -n 1 | awk '{print $1}')
         if [[ -n "$main_domain" ]] && [[ -f "$CERT_DIR/cert.crt" ]] && [[ -s "$CERT_DIR/cert.crt" ]]; then
             current_cert="$main_domain"
@@ -135,7 +138,7 @@ get_current_cert_info() {
             current_cert='無證書申請記錄'
         fi
     else
-        current_cert='未安裝 acme.sh'
+        current_cert='核心正在安裝中...'
     fi
 }
 
@@ -196,15 +199,17 @@ issue_cert_core() {
     fi
 }
 
-# --- 5. 菜單動作 ---
+# --- 5. 菜單動作 (Action) ---
 
 action_apply_standalone() {
+    check_and_update_email # 詢問郵箱
     readp "請輸入解析完成的域名: " ym
     green "域名: $ym" && sleep 1
     issue_cert_core "$ym" "standalone"
 }
 
 action_apply_dns() {
+    check_and_update_email # 詢問郵箱
     readp "請輸入主域名 (不要帶*): " ym
     green "域名: $ym" && sleep 1
     
@@ -274,9 +279,11 @@ action_renew() {
 action_uninstall() {
     readp "確定要卸載腳本並清理證書嗎？[y/N]: " confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        "$ACME_HOME"/acme.sh --uninstall
-        # 修改點：卸載同時刪除 /usr/bin/ac 和舊的 /usr/bin/acme
-        rm -rf "$ACME_HOME" "$CERT_DIR" "/usr/bin/ac" "/usr/bin/acme"
+        if [[ -f "$ACME_HOME/acme.sh" ]]; then
+            "$ACME_HOME"/acme.sh --uninstall
+        fi
+        # 同時清理舊的 ac/acme 快捷方式，確保乾淨
+        rm -rf "$ACME_HOME" "$CERT_DIR" "/usr/bin/ac-pro" "/usr/bin/ac" "/usr/bin/acme"
         sed -i '/acme.sh/d' ~/.bashrc
         green "卸載完成。"
     else
@@ -290,12 +297,12 @@ show_menu() {
     check_root
     create_shortcut
     install_deps
-    install_acme_core
+    install_acme_core_silent
     get_current_cert_info
 
     green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"           
-    echo -e "${bblue}   Acme Pro Script (v3.3)          ${plain}"
-    echo -e "${bblue}   快捷命令: 輸入 ac 即可再次運行    ${plain}"
+    echo -e "${bblue}   Acme Pro Script (v3.6)          ${plain}"
+    echo -e "${bblue}   快捷命令: 輸入 ac-pro 即可再次運行 ${plain}"
     green "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" 
     echo
     red "========================================================================="
