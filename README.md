@@ -3,7 +3,6 @@
 # 🚀 Acme Pro Script (ACME 證書管理專業版)
 
 ![License](https://img.shields.io/github/license/Yat-Muk/acme-ym?style=flat-square&label=License)
-![Version](https://img.shields.io/github/v/release/Yat-Muk/acme-ym?label=Version&style=flat-square)
 ![Language](https://img.shields.io/badge/Language-Bash-blue.svg?style=flat-square)
 
 安全、穩定、高效的 `acme.sh` 封裝腳本。修復了常見一鍵安裝腳本中存在的暴力端口釋放和 IP 檢測不兼容等 UX 缺陷。
